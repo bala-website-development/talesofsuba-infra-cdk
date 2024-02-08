@@ -9,18 +9,34 @@ import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as eventsources from "aws-cdk-lib/aws-lambda-event-sources";
 import * as cdk from "aws-cdk-lib/core";
 
+
 export class TalesofsubaInfraCdkStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
     super(scope, id, props);
 
-    ////..................SQS QUEUES................./////////
-    const project = "TalesOfSuba-";
+    var project = '';
 
+    ////..................SQS QUEUES................./////////
+    if(`${cdk.Stack.of(this).region}`=='us-east-1'){
+
+       project = "TalesOfSuba-";
+
+    }
+    else if(`${cdk.Stack.of(this).region}`=='ap-south-1')
+    {
+         project = "TalesOfSuba-qa-";
+    }
+    else
+    {
+      return ;
+    }
+    
     ////..................SQS QUEUES................./////////
 
     // SQS DLQ
     const queueDlq = new sqs.Queue(this, `${project}DLQ`, {
       visibilityTimeout: Duration.seconds(300),
+      queueName: `${project}DLQ`,
     });
 
     // SQS BufferingQueue
@@ -30,6 +46,7 @@ export class TalesofsubaInfraCdkStack extends Stack {
         queue: queueDlq,
         maxReceiveCount: 1,
       },
+      queueName: `${project}bufferingQueue`,
     });
 
     ////..................LOG Group................/////////
@@ -179,31 +196,20 @@ export class TalesofsubaInfraCdkStack extends Stack {
       credentialsArn: ApiGwToSqsRole.roleArn,
     });
 
-    const HttpApiRoute1 = new apigwv2.CfnRoute(this, `${project}HttpApiRouteSqsSendMsg`, {
-      apiId: api.ref,
-      routeKey: "GET /items",
-      target: `integrations/${httpApiIntegSqsSendMessage.ref}`,
-    });
-    const HttpApiRoute2 = new apigwv2.CfnRoute(this, `${project}HttpApiRouteSqsSendMsg2`, {
-      apiId: api.ref,
-      routeKey: "GET /itemsbytype/{id}",
-      target: `integrations/${httpApiIntegSqsSendMessage.ref}`,
-    });
-
     ////..................Lambda Function................/////////
 
     //Lambda - SqsHandlerFunction
 
-    const SqsHandlerFunction = new lambda.Function(this, `${project}sqshandler`, {
-      runtime: lambda.Runtime.NODEJS_20_X,
-      code: lambda.Code.fromAsset("lambda"),
-      handler: "sqshandler.handler",
-      functionName: `${project}sqshandler`,
-      role: SqsHandlerLambdaExecutionRole,
-      environment: {
-        table: table.tableName,
-      },
-    });
+    // const SqsHandlerFunction = new lambda.Function(this, `${project}sqshandler`, {
+    //   runtime: lambda.Runtime.NODEJS_20_X,
+    //   code: lambda.Code.fromAsset("lambda"),
+    //   handler: "sqshandler.handler",
+    //   functionName: `${project}sqshandler`,
+    //   role: SqsHandlerLambdaExecutionRole,
+    //   environment: {
+    //     table: table.tableName,
+    //   },
+    // });
 
     //Invoking Lambda after integrating with API Gateway
 
@@ -220,20 +226,57 @@ export class TalesofsubaInfraCdkStack extends Stack {
       integrationUri: ApiGatewayHandlerFunction.functionArn,
     });
 
-    const HttpApiRoutetoLambda = new apigwv2.CfnRoute(this, `${project}HttpApiRouteInvokeLambda`, {
+    const HttpApiRoute2 = new apigwv2.CfnRoute(this, `${project}HttpApiRouteSqsSendMsg2`, {
       apiId: api.ref,
-      routeKey: "GET /items",
+      routeKey: "GET /itemsbytype/{id}",
+      target: `integrations/${httpApiIntegInvokeLambda.ref}`,
+    });
+
+   
+
+    const HttpApiRoute4 = new apigwv2.CfnRoute(this, `${project}HttpApiRouteSqsSendMsg4`, {
+      apiId: api.ref,
+      routeKey: "GET /items/{id}",
+      target: `integrations/${httpApiIntegInvokeLambda.ref}`,
+    });
+    const HttpApiRoute5 = new apigwv2.CfnRoute(this, `${project}HttpApiRouteSqsSendMsg5`, {
+      apiId: api.ref,
+      routeKey: "PUT /items",
+      target: `integrations/${httpApiIntegSqsSendMessage.ref}`,
+    });
+    const HttpApiRoute6 = new apigwv2.CfnRoute(this, `${project}HttpApiRouteSqsSendMsg6`, {
+      apiId: api.ref,
+      routeKey: "POST /items",
+      target: `integrations/${httpApiIntegSqsSendMessage.ref}`,
+    });
+    const HttpApiRoute3 = new apigwv2.CfnRoute(this, `${project}HttpApiRouteSqsSendMsg3`, {
+      apiId: api.ref,
+      routeKey: "DELETE /items/{id}",
       target: `integrations/${httpApiIntegInvokeLambda.ref}`,
     });
 
     // Associate the Lambda function with a CloudWatch Logs log group
     const lambdaLogGroup = new logs.LogGroup(this, "MyLambdaLogGroup", {
-      logGroupName: "/aws/lambda/" + SqsHandlerFunction.functionName,
+      logGroupName: "/aws/lambda/" + ApiGatewayHandlerFunction.functionName,
       retention: logs.RetentionDays.ONE_WEEK, // Set the desired retention period
     });
 
     //Add SQS as event source to trigger Lambda
-    SqsHandlerFunction.addEventSource(new eventsources.SqsEventSource(bufferingQueue));
+    ApiGatewayHandlerFunction.addEventSource(new eventsources.SqsEventSource(bufferingQueue));
+
+    const HttpApiLambdaPermission1 = new lambda.CfnPermission(this, `${project}HttpApiLambdaPermission1`, {
+      action: "lambda:InvokeFunction",
+      functionName: ApiGatewayHandlerFunction.functionName,
+      principal:"apigateway.amazonaws.com",
+      sourceArn: `arn:aws:execute-api:${cdk.Stack.of(this).region}:${cdk.Stack.of(this).account}:${api.ref}/*/*/items/{id}`,
+    } );
+
+    const HttpApiLambdaPermission2 = new lambda.CfnPermission(this, `${project}HttpApiLambdaPermission2`, {
+      action: "lambda:InvokeFunction",
+      functionName: ApiGatewayHandlerFunction.functionName,
+      principal:"apigateway.amazonaws.com",
+      sourceArn: `arn:aws:execute-api:${cdk.Stack.of(this).region}:${cdk.Stack.of(this).account}:${api.ref}/*/*/itemsbytype/{id}`,
+    } );
 
     ////..................Outputs................/////////
     new cdk.CfnOutput(this, `${project}HttpApiEndpoint`, {
